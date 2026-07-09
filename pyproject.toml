@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gridfeatures"
+version = "0.1.0"
+description = "Identify and characterize features (clusters) in gridded climate/meteorological data."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Pedro", email = "videogame531@live.com" }]
+keywords = ["climate", "precipitation", "feature-extraction", "clustering", "gpm", "dyamond"]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "xarray>=2022.3.0",
+    "netCDF4>=1.5",
+    "pandas>=1.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/pedroanguloumana/General_Gridded_Feature_Extraction"
+Source = "https://github.com/pedroanguloumana/General_Gridded_Feature_Extraction"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gridfeatures"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
