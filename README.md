@@ -96,8 +96,10 @@ def frac_above_5(f):
 - `total` — area-weighted sum (e.g. total precip volume)
 - `area_km2`
 - `centroid_lat`, `centroid_lon`
-- `touches_boundary` — feature touches grid edge or a NaN (generic swath-edge flag)
-- `swath_edge_pixels` — number of feature pixels bordering an artificial-swath seam
+- `touches_boundary` — `True` if feature touches grid edge or a NaN cell (generic swath-edge flag)
+- `boundary_pixels` — count of feature pixels bordering the grid edge or a NaN cell
+  (for real GPM L2 swath data: pixels on the swath edge)
+- `swath_edge_pixels` — number of feature pixels bordering an *artificial*-swath seam
 - `core_size(core_threshold, comparison=">=", connectivity=None)` — **factory**;
   size (pixels) of the largest contiguous sub-region above a higher threshold
   (e.g. the biggest 10 mm/hr core inside a 1 mm/hr feature)

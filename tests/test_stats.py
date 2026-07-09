@@ -112,6 +112,32 @@ def test_swath_edge_pixels_counts_seam():
     assert n_edge <= feats[0].size
 
 
+def test_boundary_pixels_grid_edge(simple_field):
+    field, lats, lons = simple_field
+    feats = _features(field, lats, lons)
+    blob_b = next(f for f in feats if f.size == 6)   # on the grid edge
+    blob_a = next(f for f in feats if f.size == 4)   # interior, no NaNs
+    assert stats.boundary_pixels(blob_b) >= 1
+    assert stats.boundary_pixels(blob_a) == 0
+
+
+def test_boundary_pixels_counts_nan_edge():
+    # Interior feature ringed by NaN on one side -> those pixels are boundary.
+    field = np.array(
+        [
+            [5.0, 5.0, np.nan],
+            [5.0, 5.0, np.nan],
+            [5.0, 5.0, np.nan],
+        ]
+    )
+    lats = np.array([0.0, 1.0, 2.0])
+    lons = np.array([0.0, 1.0, 2.0])
+    feats = _features(field, lats, lons)
+    assert len(feats) == 1
+    # All 6 cells touch either the grid edge or the NaN column.
+    assert stats.boundary_pixels(feats[0]) == 6
+
+
 def test_touches_boundary(simple_field):
     field, lats, lons = simple_field
     feats = _features(field, lats, lons)

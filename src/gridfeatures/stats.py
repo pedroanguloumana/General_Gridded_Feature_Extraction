@@ -95,6 +95,32 @@ def touches_boundary(f):
     return False
 
 
+def boundary_pixels(f):
+    """Number of feature pixels bordering the observable-domain boundary.
+
+    A pixel counts if any of its 4-neighbours is off the grid or is a NaN
+    (missing-data) cell. For real GPM L2 swath data - where cells outside the
+    observed swath are NaN - this is the count of feature pixels sitting on the
+    swath edge, i.e. how much of the feature may extend beyond the observable
+    zone. (Use :func:`swath_edge_pixels` for the *artificial* swath instead.)
+    """
+    field = f._ctx.field
+    ny, nx = field.shape
+    rows, cols = f.rows, f.cols
+    is_edge = np.zeros(rows.shape, dtype=bool)
+    for dr, dc in _NEIGHBORS:
+        rr = rows + dr
+        cc = cols + dc
+        off = (rr < 0) | (rr >= ny) | (cc < 0) | (cc >= nx)
+        is_edge |= off
+        valid = ~off
+        if valid.any():
+            nan_neighbor = np.zeros(rows.shape, dtype=bool)
+            nan_neighbor[valid] = np.isnan(field[rr[valid], cc[valid]])
+            is_edge |= nan_neighbor
+    return int(is_edge.sum())
+
+
 def swath_edge_pixels(f):
     """Number of feature pixels bordering an artificial-swath edge.
 
