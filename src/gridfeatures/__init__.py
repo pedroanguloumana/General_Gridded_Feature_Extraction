@@ -30,7 +30,7 @@ from .detection import label_features
 from .feature import Feature, FieldContext
 from .runner import extract_features, feature_row, process_file, run
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Config",

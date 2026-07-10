@@ -73,36 +73,11 @@ min = minimum
 
 
 # --- boundary / swath edge ------------------------------------------------
-def touches_boundary(f):
-    """True if the feature touches the grid edge or a NaN (missing-data) cell.
+def _boundary_mask(f, count_grid_edge):
+    """Boolean array over the feature's member cells: is each one on the boundary?
 
-    This flags features that may extend beyond the observable domain - the
-    generic analogue of a real GPM swath edge.
-    """
-    ny, nx = f.grid_shape
-    if (
-        (f.rows == 0).any()
-        or (f.rows == ny - 1).any()
-        or (f.cols == 0).any()
-        or (f.cols == nx - 1).any()
-    ):
-        return True
-    # Not on the grid edge, so all 4-neighbours are in range; check for NaNs.
-    field = f._ctx.field
-    for dr, dc in _NEIGHBORS:
-        if np.isnan(field[f.rows + dr, f.cols + dc]).any():
-            return True
-    return False
-
-
-def boundary_pixels(f):
-    """Number of feature pixels bordering the observable-domain boundary.
-
-    A pixel counts if any of its 4-neighbours is off the grid or is a NaN
-    (missing-data) cell. For real GPM L2 swath data - where cells outside the
-    observed swath are NaN - this is the count of feature pixels sitting on the
-    swath edge, i.e. how much of the feature may extend beyond the observable
-    zone. (Use :func:`swath_edge_pixels` for the *artificial* swath instead.)
+    A cell is on the boundary if a 4-neighbour is a NaN (missing-data) cell, or
+    - when ``count_grid_edge`` - if a 4-neighbour lies off the grid.
     """
     field = f._ctx.field
     ny, nx = field.shape
@@ -112,13 +87,89 @@ def boundary_pixels(f):
         rr = rows + dr
         cc = cols + dc
         off = (rr < 0) | (rr >= ny) | (cc < 0) | (cc >= nx)
-        is_edge |= off
+        if count_grid_edge:
+            is_edge |= off
         valid = ~off
         if valid.any():
             nan_neighbor = np.zeros(rows.shape, dtype=bool)
             nan_neighbor[valid] = np.isnan(field[rr[valid], cc[valid]])
             is_edge |= nan_neighbor
-    return int(is_edge.sum())
+    return is_edge
+
+
+def boundary_pixels_where(count_grid_edge=True):
+    """Factory: count feature pixels bordering the observable-domain boundary.
+
+    NaN 4-neighbours always count. Off-grid 4-neighbours count only when
+    ``count_grid_edge`` is True.
+
+    Parameters
+    ----------
+    count_grid_edge : bool
+        Whether a pixel on the edge of the array counts as a boundary pixel.
+
+        Use ``True`` (the default, and what :func:`boundary_pixels` does) for
+        fields whose array edge really is a data boundary - a model domain
+        edge, a regional cutout you intend to treat as closed.
+
+        Use ``False`` for satellite swath crops such as GPM L2. There the array
+        edges are the *along-track* cut (the granule time range) or a regional
+        box clip, and the instrument observed straight through them; only NaN
+        cells inside the grid mark the real *cross-track* swath edge. Counting
+        grid edges there inflates the result by the whole along-track cap.
+
+    Notes
+    -----
+    With ``count_grid_edge=False`` the count is slightly conservative: where a
+    cross-track edge exits through a corner of a tight crop, the unobserved
+    neighbour is off-grid rather than NaN, so a few pixels per swath are missed.
+    Resolving that would need native along/cross scan coordinates.
+    """
+    def _boundary_pixels(f):
+        return int(_boundary_mask(f, count_grid_edge).sum())
+
+    suffix = "" if count_grid_edge else "_no_grid_edge"
+    _boundary_pixels.__name__ = f"boundary_pixels{suffix}"
+    _boundary_pixels.__doc__ = (
+        "Number of feature pixels bordering a NaN cell"
+        + (" or the grid edge." if count_grid_edge else " (grid edges ignored).")
+    )
+    return _boundary_pixels
+
+
+def touches_boundary_where(count_grid_edge=True):
+    """Factory: True if the feature has any boundary pixel.
+
+    Boolean companion to :func:`boundary_pixels_where`; see it for the meaning
+    of ``count_grid_edge``.
+    """
+    def _touches_boundary(f):
+        return bool(_boundary_mask(f, count_grid_edge).any())
+
+    suffix = "" if count_grid_edge else "_no_grid_edge"
+    _touches_boundary.__name__ = f"touches_boundary{suffix}"
+    return _touches_boundary
+
+
+#: Number of feature pixels bordering the grid edge or a NaN cell.
+#:
+#: For a closed domain this is the count of pixels on the observable boundary.
+#: For GPM L2 swath crops prefer :data:`cross_track_edge_pixels`, which does not
+#: mistake the along-track cut for a swath edge.
+boundary_pixels = boundary_pixels_where(count_grid_edge=True)
+
+#: True if the feature touches the grid edge or a NaN (missing-data) cell.
+touches_boundary = touches_boundary_where(count_grid_edge=True)
+
+#: Number of feature pixels bordering a NaN cell, ignoring the grid edge.
+#:
+#: The right "swath edge" metric for real satellite swath data (e.g. GPM L2),
+#: where the array edges are the along-track cut rather than the instrument's
+#: cross-track edge.
+cross_track_edge_pixels = boundary_pixels_where(count_grid_edge=False)
+
+#: True if the feature borders a NaN cell, ignoring the grid edge.
+touches_cross_track_edge = touches_boundary_where(count_grid_edge=False)
 
 
 def swath_edge_pixels(f):

@@ -96,10 +96,37 @@ def frac_above_5(f):
 - `total` — area-weighted sum (e.g. total precip volume)
 - `area_km2`
 - `centroid_lat`, `centroid_lon`
-- `touches_boundary` — `True` if feature touches grid edge or a NaN cell (generic swath-edge flag)
+- `touches_boundary` — `True` if feature touches the grid edge or a NaN cell
 - `boundary_pixels` — count of feature pixels bordering the grid edge or a NaN cell
-  (for real GPM L2 swath data: pixels on the swath edge)
+- `touches_cross_track_edge`, `cross_track_edge_pixels` — same, but **ignoring the grid
+  edge** (see below); the right choice for real satellite swath data
+- `boundary_pixels_where(count_grid_edge=True)`, `touches_boundary_where(...)` —
+  **factories** behind the four names above
 - `swath_edge_pixels` — number of feature pixels bordering an *artificial*-swath seam
+
+### Grid edges are not always swath edges
+
+NaN 4-neighbours always mark the observable boundary. Whether an **off-grid** 4-neighbour
+does is a property of your data, so it is a switch:
+
+```python
+stats.boundary_pixels           # == boundary_pixels_where(count_grid_edge=True)
+stats.cross_track_edge_pixels   # == boundary_pixels_where(count_grid_edge=False)
+```
+
+Use `count_grid_edge=True` when the array edge really is a data boundary — a model domain
+edge, a cutout you mean to treat as closed.
+
+Use `count_grid_edge=False` for satellite swath crops such as **GPM L2**. There the array
+edges are the *along-track* cut (the granule's time range) or a regional box clip, and the
+instrument observed straight through them; only NaN cells inside the grid mark the real
+*cross-track* swath edge. Counting grid edges inflates the result by the entire
+along-track cap — on one day of GPM 2Ku over Africa it over-flagged 40 of 252 features
+where the correct answer was 34.
+
+`count_grid_edge=False` is slightly conservative: where a cross-track edge exits through a
+corner of a tight crop, the unobserved neighbour is off-grid rather than NaN, so a few
+pixels per swath are missed. Fixing that would need native along/cross scan coordinates.
 - `core_size(core_threshold, comparison=">=", connectivity=None)` — **factory**;
   size (pixels) of the largest contiguous sub-region above a higher threshold
   (e.g. the biggest 10 mm/hr core inside a 1 mm/hr feature)

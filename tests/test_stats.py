@@ -138,6 +138,59 @@ def test_boundary_pixels_counts_nan_edge():
     assert stats.boundary_pixels(feats[0]) == 6
 
 
+def _band_field():
+    """Vertical observed band (cols 2..5) with NaN either side, 8 rows.
+
+    Two features: one on the top row (the 'along-track cap'), one against the
+    band's west edge (a real cross-track edge).
+    """
+    field = np.full((8, 8), np.nan)
+    field[:, 2:6] = 0.0                  # observed band
+    field[0:2, 3:5] = 5.0                # cap feature: on the grid's top row
+    field[4:6, 2:4] = 5.0                # west-edge feature: adjacent to NaN col 1
+    lats = np.linspace(-4.0, 4.0, 8)
+    lons = np.linspace(-4.0, 4.0, 8)
+    return field, lats, lons
+
+
+def test_count_grid_edge_false_ignores_along_track_cap():
+    field, lats, lons = _band_field()
+    feats = _features(field, lats, lons)
+    cap = next(f for f in feats if f.rows.min() == 0)
+    west = next(f for f in feats if f.rows.min() == 4)
+
+    # Current default: the cap's top row counts because it is on the grid edge.
+    assert stats.boundary_pixels(cap) == 2
+    assert stats.touches_boundary(cap) is True
+
+    # Ignoring grid edges, the cap is interior to the swath -- nothing to count.
+    assert stats.cross_track_edge_pixels(cap) == 0
+    assert stats.touches_cross_track_edge(cap) is False
+
+    # The west-edge feature borders NaN, so both definitions agree on it.
+    assert stats.boundary_pixels(west) == stats.cross_track_edge_pixels(west) == 2
+    assert stats.touches_cross_track_edge(west) is True
+
+
+def test_boundary_pixels_where_defaults_match_module_level():
+    field, lats, lons = _band_field()
+    feats = _features(field, lats, lons)
+    default = stats.boundary_pixels_where()
+    strict = stats.boundary_pixels_where(count_grid_edge=False)
+    for f in feats:
+        assert default(f) == stats.boundary_pixels(f)
+        assert strict(f) == stats.cross_track_edge_pixels(f)
+        assert strict(f) <= default(f)   # dropping a rule never adds pixels
+
+
+def test_cross_track_never_exceeds_boundary(simple_field):
+    field, lats, lons = simple_field
+    for f in _features(field, lats, lons):
+        assert stats.cross_track_edge_pixels(f) <= stats.boundary_pixels(f)
+        if stats.touches_cross_track_edge(f):
+            assert stats.touches_boundary(f) is True
+
+
 def test_touches_boundary(simple_field):
     field, lats, lons = simple_field
     feats = _features(field, lats, lons)
