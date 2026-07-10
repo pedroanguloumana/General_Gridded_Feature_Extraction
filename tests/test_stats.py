@@ -191,6 +191,80 @@ def test_cross_track_never_exceeds_boundary(simple_field):
             assert stats.touches_boundary(f) is True
 
 
+def _legacy_reference(field, feat_mask):
+    """Independent implementation: the old codebase's scene-wide edge mask
+    intersected with the feature's find_objects bounding box."""
+    from scipy import ndimage as ndi
+
+    in_swath = ~np.isnan(field)
+    edge = in_swath & ndi.binary_dilation(~in_swath)
+    sl = ndi.find_objects(feat_mask.astype(int))[0]
+    return not bool(edge[sl].any())
+
+
+def test_legacy_is_complete_uses_bbox_not_pixels():
+    # L-shaped feature. The NaN at (0, 4) makes (0, 3) an edge pixel, which
+    # falls inside the feature's bounding box (rows 0..2, cols 0..3) but is
+    # not a member of the feature. So: complete by contact, incomplete legacy.
+    field = np.zeros((4, 6))
+    field[0, 4] = np.nan
+    for r, c in [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (2, 3)]:
+        field[r, c] = 5.0
+    lats = np.linspace(0.0, 3.0, 4)
+    lons = np.linspace(0.0, 5.0, 6)
+
+    feats = _features(field, lats, lons)
+    assert len(feats) == 1
+    f = feats[0]
+    assert f.bbox == (0, 3, 0, 4)
+
+    # No feature pixel borders a NaN ...
+    assert stats.cross_track_edge_pixels(f) == 0
+    assert stats.touches_cross_track_edge(f) is False
+    # ... yet an edge pixel lies inside its bounding box.
+    assert stats.legacy_is_complete(f) is False
+    assert stats.legacy_is_complete(f) == _legacy_reference(field, f.mask)
+
+
+def test_legacy_is_complete_interior_feature(simple_field):
+    field, lats, lons = simple_field
+    blob_a = next(f for f in _features(field, lats, lons) if f.size == 4)
+    # Interior blob, no NaNs anywhere in simple_field -> complete.
+    assert stats.legacy_is_complete(blob_a) is True
+    assert stats.legacy_is_complete(blob_a) == _legacy_reference(field, blob_a.mask)
+
+
+def test_legacy_is_complete_agrees_when_feature_touches_edge():
+    # Feature pressed against the NaN column: both definitions call it an edge.
+    field = np.array(
+        [
+            [0.0, 5.0, 5.0, np.nan],
+            [0.0, 5.0, 5.0, np.nan],
+            [0.0, 0.0, 0.0, np.nan],
+        ]
+    )
+    lats = np.linspace(0.0, 2.0, 3)
+    lons = np.linspace(0.0, 3.0, 4)
+    f = _features(field, lats, lons)[0]
+    assert stats.touches_cross_track_edge(f) is True
+    assert stats.legacy_is_complete(f) is False
+    assert stats.legacy_is_complete(f) == _legacy_reference(field, f.mask)
+
+
+def test_legacy_is_complete_ignores_grid_edge():
+    # Feature on the array edge with no NaN anywhere: the old code's
+    # binary_dilation has border_value=0, so the grid edge is not a swath edge.
+    field = np.zeros((4, 4))
+    field[0, 0:2] = 5.0
+    lats = np.linspace(0.0, 3.0, 4)
+    lons = np.linspace(0.0, 3.0, 4)
+    f = _features(field, lats, lons)[0]
+    assert stats.touches_boundary(f) is True          # grid edge counts here
+    assert stats.touches_cross_track_edge(f) is False  # ... but not here
+    assert stats.legacy_is_complete(f) is True
+    assert stats.legacy_is_complete(f) == _legacy_reference(field, f.mask)
+
+
 def test_touches_boundary(simple_field):
     field, lats, lons = simple_field
     feats = _features(field, lats, lons)

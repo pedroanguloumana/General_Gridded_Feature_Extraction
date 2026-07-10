@@ -172,6 +172,49 @@ cross_track_edge_pixels = boundary_pixels_where(count_grid_edge=False)
 touches_cross_track_edge = touches_boundary_where(count_grid_edge=False)
 
 
+def legacy_is_complete(f):
+    """True if the feature's *bounding box* contains no cross-track edge pixel.
+
+    Reproduces the ``is_complete`` flag of the earlier GPM feature codebase,
+    which built a swath-edge mask over the whole scene::
+
+        in_swath = ~np.isnan(near_surf_rain)
+        edge = in_swath & binary_dilation(~in_swath)     # scipy default = 4-conn
+
+    and then asked whether any edge pixel fell inside the feature's
+    ``scipy.ndimage.find_objects`` bounding box.
+
+    Note what that means: the test is on the **bounding box**, not on the
+    feature's own pixels. Features are rarely rectangular, so a feature can be
+    marked incomplete because of an edge pixel several cells away from any of
+    its members - one real case is a 142-pixel L-shaped feature whose bbox
+    corner overlaps the swath edge 6.3 pixels from its nearest pixel.
+
+    Prefer :data:`touches_cross_track_edge` for new work: it asks whether the
+    feature itself touches the swath edge, which is almost always the intended
+    question. This function exists to reproduce and validate against the old
+    results (it agrees on 193/193 features of GPM 2Ku over Africa, 2016-06-01).
+
+    Returns True when the feature is *complete* (does not reach the edge), so
+    it is the logical negation of a "touches" statistic.
+    """
+    r0, r1, c0, c1 = f.bbox
+    ny, nx = f.grid_shape
+    # One-cell halo so that dilation sees the neighbours of the bbox's own
+    # cells. Clipping at the array border reproduces binary_dilation's
+    # border_value=0, i.e. off-grid is not treated as unobserved.
+    R = slice(np.maximum(r0 - 1, 0), np.minimum(r1 + 1, ny))
+    C = slice(np.maximum(c0 - 1, 0), np.minimum(c1 + 1, nx))
+    sub = f._ctx.field[R, C]
+    not_in_swath = np.isnan(sub)
+    structure = ndimage.generate_binary_structure(2, 1)
+    edge = (~not_in_swath) & ndimage.binary_dilation(not_in_swath, structure=structure)
+    # Crop the halo away, leaving exactly the find_objects bounding box.
+    edge = edge[r0 - R.start:r0 - R.start + (r1 - r0),
+                c0 - C.start:c0 - C.start + (c1 - c0)]
+    return not bool(edge.any())
+
+
 def swath_edge_pixels(f):
     """Number of feature pixels bordering an artificial-swath edge.
 

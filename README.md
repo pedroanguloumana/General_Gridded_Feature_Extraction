@@ -103,6 +103,8 @@ def frac_above_5(f):
 - `boundary_pixels_where(count_grid_edge=True)`, `touches_boundary_where(...)` —
   **factories** behind the four names above
 - `swath_edge_pixels` — number of feature pixels bordering an *artificial*-swath seam
+- `legacy_is_complete` — bounding-box edge test, for reproducing prior GPM results
+  (see below)
 
 ### Grid edges are not always swath edges
 
@@ -127,6 +129,28 @@ where the correct answer was 34.
 `count_grid_edge=False` is slightly conservative: where a cross-track edge exits through a
 corner of a tight crop, the unobserved neighbour is off-grid rather than NaN, so a few
 pixels per swath are missed. Fixing that would need native along/cross scan coordinates.
+
+### `legacy_is_complete`: bounding box vs. pixels
+
+An earlier GPM feature codebase built a scene-wide edge mask and then asked whether any
+edge pixel fell inside a feature's `scipy.ndimage.find_objects` **bounding box**:
+
+```python
+in_swath = ~np.isnan(near_surf_rain)
+edge = in_swath & binary_dilation(~in_swath)     # == touches_cross_track_edge semantics
+is_complete = not edge[find_objects(labeled)[i]].any()
+```
+
+The edge mask itself is exactly what `cross_track_edge_pixels` counts. The difference is
+that it is intersected with the bounding box rather than with the feature's own pixels.
+Features are rarely rectangular, so this marks a feature incomplete when an edge pixel
+merely falls within its bbox — in one real case a 142-pixel L-shaped feature whose bbox
+corner overlaps the swath edge **6.3 pixels** from its nearest member pixel.
+
+`stats.legacy_is_complete` reproduces that flag exactly (193/193 features, GPM 2Ku over
+Africa, 2016-06-01) and returns `True` when the feature is complete. Use it to validate
+against old results; prefer `touches_cross_track_edge` for new work, which asks whether
+the feature *itself* reaches the swath edge.
 - `core_size(core_threshold, comparison=">=", connectivity=None)` — **factory**;
   size (pixels) of the largest contiguous sub-region above a higher threshold
   (e.g. the biggest 10 mm/hr core inside a 1 mm/hr feature)
