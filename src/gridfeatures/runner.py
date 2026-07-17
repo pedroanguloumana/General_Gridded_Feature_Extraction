@@ -12,7 +12,7 @@ from .detection import label_features
 from .feature import Feature, FieldContext
 from .grid import cell_area_km2
 from .io import read_fields, write_csv
-from .swath import swath_index
+from .swath import dominant_swath, swath_index
 
 
 def _area_from_2d(lats2d, lons2d):
@@ -83,10 +83,15 @@ def feature_row(feature, config):
 
     if config.use_swath and feature.swath_index is not None:
         idx = feature.swath_index
-        values, counts = np.unique(idx, return_counts=True)
-        row["swath_id"] = int(values[np.argmax(counts)])   # dominant swath
-        row["n_swaths"] = int(values.size)
-        row["crosses_swath_boundary"] = bool(values.size > 1)
+        # px_in_swath is the pixel count of the strip labelled swath_id, not of
+        # some other plurality rule - both come from dominant_swath, so it is
+        # always a valid denominator for stats.swath_edge_pixels_in_dominant.
+        swath_id, px_in_swath = dominant_swath(idx)
+        row["swath_id"] = swath_id
+        row["px_in_swath"] = px_in_swath
+        n_swaths = int(np.unique(idx).size)
+        row["n_swaths"] = n_swaths
+        row["crosses_swath_boundary"] = bool(n_swaths > 1)
 
     for column, fn in config.statistics.items():
         row[column] = fn(feature)

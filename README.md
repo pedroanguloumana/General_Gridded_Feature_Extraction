@@ -102,7 +102,12 @@ def frac_above_5(f):
   edge** (see below); the right choice for real satellite swath data
 - `boundary_pixels_where(count_grid_edge=True)`, `touches_boundary_where(...)` —
   **factories** behind the four names above
-- `swath_edge_pixels` — number of feature pixels bordering an *artificial*-swath seam
+- `swath_edge_pixels` — number of feature pixels bordering an *artificial*-swath seam,
+  counted over the **whole** feature (each pixel against its own strip)
+- `swath_edge_pixels_in_dominant` — same, but restricted to the feature's **dominant
+  strip**; pairs with the `px_in_swath` column to measure how much of an artificial-swath
+  feature sits against a seam (see below)
+- `swath_edge_fraction_in_dominant` — the ratio of the two, as a convenience
 - `legacy_is_complete` — bounding-box edge test, for reproducing prior GPM results
   (see below)
 
@@ -162,12 +167,58 @@ The domain is tiled into parallel strips of `swath_width_km` inclined
 `swath_angle_deg` from the equator; each cell gets a swath index. Every feature
 then gets extra CSV columns:
 
-- `swath_id` — the dominant swath the feature falls in
+- `swath_id` — the dominant swath the feature falls in (the strip holding the
+  plurality of its pixels; ties go to the lowest strip index)
+- `px_in_swath` — how many of the feature's pixels are in that dominant strip
 - `n_swaths` — how many swaths it spans
 - `crosses_swath_boundary` — `True` if it spans more than one (would be clipped)
 
 This intentionally lays a fixed set of strips over the domain and records what
 falls where; it does not search for a best-fitting swath per feature.
+
+### Keeping features that are mostly within the swath
+
+The same question — *is this feature mostly inside the swath, or is it clipped?* —
+has to be asked of gridded model output and of real retrievals in a way that gives
+comparable answers. The fraction is the same on both sides:
+
+```
+fraction = (swath-edge pixels of the feature) / (feature pixels within the swath)
+```
+
+but each term is spelled differently, because "within the swath" means something
+different:
+
+| | model field + artificial swath | real swath (e.g. GPM L2) |
+|---|---|---|
+| within the swath | `px_in_swath` column — pixels in the dominant strip | `stats.size` — everything outside the swath is NaN, so the whole feature *is* the in-swath portion |
+| swath edge | `stats.swath_edge_pixels_in_dominant` — dominant-strip pixels with a 4-neighbour in another strip | `stats.cross_track_edge_pixels` — pixels bordering NaN, grid edges ignored |
+
+Neither numerator counts off-grid neighbours, so the domain edge is never mistaken
+for a swath edge on either side.
+
+Both terms are raw counts, so the threshold stays a post-processing choice:
+
+```python
+config.statistics["swath_edge_px_dom"] = stats.swath_edge_pixels_in_dominant
+df = gridfeatures.run(config)
+mostly_inside = df[df.swath_edge_px_dom / df.px_in_swath < 0.05]
+```
+
+On the real-swath side, add `stats.size` and `stats.cross_track_edge_pixels` to
+`statistics` and take the same ratio. (`stats.swath_edge_fraction_in_dominant`
+returns the model-side ratio directly if you want it in one column.)
+
+Two things to know about the artificial-swath side:
+
+- Use `swath_edge_pixels_in_dominant`, not `swath_edge_pixels`, as the numerator.
+  The latter tests each pixel against *its own* strip, so a feature straddling a
+  seam contributes pixels from both sides — a whole-feature count that can exceed
+  `px_in_swath` and push the fraction above 1.
+- Detection runs on the full field, so a feature spanning strips is detected as
+  one feature and its dominant-strip portion stands in for what a single overpass
+  would have seen. That is an approximation: a real overpass would also segment
+  *within* the swath. Re-segmenting per strip is out of scope here.
 
 ## Output columns
 
@@ -176,7 +227,8 @@ Every row carries provenance plus your statistics:
 - `source_file` — originating file path
 - `feature_id` — `<basename>:<time_index>:<label>`, unique per feature
 - `time`, `time_index` — present when `time_name` is set
-- swath columns — present when `use_swath=True`
+- swath columns (`swath_id`, `px_in_swath`, `n_swaths`, `crosses_swath_boundary`) —
+  present when `use_swath=True`
 - one column per entry in `statistics`
 
 ## Parallelism

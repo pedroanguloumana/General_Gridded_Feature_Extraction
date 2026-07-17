@@ -65,3 +65,32 @@ def swath_index(lats2d, lons2d, width_km, angle_deg, origin=None):
     perp0 = np.nanmin(perp)
     idx = np.floor((perp - perp0) / width_km).astype(int)
     return idx
+
+
+def dominant_swath(idx):
+    """The strip holding the plurality of ``idx``, as ``(swath_id, count)``.
+
+    ``idx`` is a 1D array of per-cell swath indices (e.g. a Feature's
+    ``swath_index``). Ties are broken by lowest strip index, since
+    :func:`numpy.unique` returns sorted values and ``argmax`` takes the first
+    maximum.
+
+    This is the single definition of "dominant strip" in the package. The
+    runner's ``swath_id``/``px_in_swath`` columns and
+    :func:`gridfeatures.stats.swath_edge_pixels_in_dominant` all go through it,
+    which is what guarantees the edge count is a subset of ``px_in_swath``: they
+    are talking about the same strip. Do not reimplement the rule elsewhere
+    (``scipy.stats.mode``, for instance, breaks ties differently), or the
+    edge/px_in_swath fraction can silently exceed 1.
+
+    Approximation, by design: detection runs on the full global field, so a
+    feature straddling a seam is detected as one feature and we approximate the
+    "observed" feature as its dominant-strip portion. A real single-swath
+    overpass would only ever see that portion, but it would also segment within
+    the swath, possibly splitting or shrinking the feature differently. Fully
+    resolving that would mean re-segmenting within each strip, which this
+    package does not do.
+    """
+    values, counts = np.unique(idx, return_counts=True)
+    k = int(np.argmax(counts))
+    return int(values[k]), int(counts[k])

@@ -21,6 +21,7 @@ import numpy as np
 from scipy import ndimage
 
 from .detection import _get_comparator
+from .swath import dominant_swath
 
 # 4-connectivity neighbour offsets (row, col).
 _NEIGHBORS = ((1, 0), (-1, 0), (0, 1), (0, -1))
@@ -240,6 +241,75 @@ def swath_edge_pixels(f):
         diff[valid] = swath[rr[valid], cc[valid]] != own[valid]
         is_edge |= diff
     return int(is_edge.sum())
+
+
+def swath_edge_pixels_in_dominant(f):
+    """Swath-edge pixels of the feature's *dominant-strip* portion.
+
+    Counts pixels that (a) lie in the feature's dominant strip - the one holding
+    the plurality of its pixels, per :func:`gridfeatures.swath.dominant_swath` -
+    and (b) have a 4-neighbour in a *different* strip. Off-grid neighbours do
+    not count, matching the ``count_grid_edge=False`` convention used for real
+    swaths (:data:`cross_track_edge_pixels`): the domain edge is not a swath
+    edge. Requires ``use_swath=True`` in the Config (raises otherwise).
+
+    This is the artificial-swath twin of :data:`cross_track_edge_pixels`, and it
+    pairs with the runner's ``px_in_swath`` column to form the same fraction on
+    gridded model output as on real retrievals::
+
+        DYAMOND: swath_edge_pixels_in_dominant / px_in_swath
+        GPM:     cross_track_edge_pixels       / size
+
+    On GPM everything outside the swath is NaN, so the whole feature *is* its
+    in-swath portion and ``size`` is the denominator; here every pixel is in
+    some strip, so the dominant strip stands in for "what one overpass saw".
+    The result is always <= ``px_in_swath``: both restrict to the same strip.
+
+    Do not substitute :func:`swath_edge_pixels` for this. That one tests each
+    pixel against its *own* strip, so for a feature straddling a seam it counts
+    pixels on *both* sides - a whole-feature quantity whose value can exceed
+    ``px_in_swath`` and push the fraction above 1.
+
+    See :func:`gridfeatures.swath.dominant_swath` for the approximation involved
+    in treating the dominant-strip portion as the observed feature.
+    """
+    swath = f._ctx.swath
+    if swath is None:
+        raise ValueError(
+            "swath_edge_pixels_in_dominant requires use_swath=True in the Config."
+        )
+    ny, nx = swath.shape
+    own, _ = dominant_swath(swath[f.rows, f.cols])
+    in_dominant = swath[f.rows, f.cols] == own
+    rows = f.rows[in_dominant]
+    cols = f.cols[in_dominant]
+    is_edge = np.zeros(rows.shape, dtype=bool)
+    for dr, dc in _NEIGHBORS:
+        rr = rows + dr
+        cc = cols + dc
+        valid = (rr >= 0) & (rr < ny) & (cc >= 0) & (cc < nx)
+        diff = np.zeros(rows.shape, dtype=bool)
+        diff[valid] = swath[rr[valid], cc[valid]] != own
+        is_edge |= diff
+    return int(is_edge.sum())
+
+
+def swath_edge_fraction_in_dominant(f):
+    """Fraction of the dominant-strip portion that sits on a swath seam.
+
+    ``swath_edge_pixels_in_dominant(f) / <pixels in the dominant strip>``, in
+    [0, 1]. A convenience for interactive use; for batch output prefer emitting
+    the raw counts (the stat above plus the runner's ``px_in_swath`` column) and
+    forming the ratio in post-processing, so the threshold stays a choice you
+    make later rather than one baked into the CSV.
+    """
+    idx = f.swath_index
+    if idx is None:
+        raise ValueError(
+            "swath_edge_fraction_in_dominant requires use_swath=True in the Config."
+        )
+    _, px_in_swath = dominant_swath(idx)
+    return swath_edge_pixels_in_dominant(f) / px_in_swath
 
 
 # --- parameterized factories ---------------------------------------------
