@@ -17,6 +17,8 @@ Example
 ... }
 """
 
+import math
+
 import numpy as np
 from scipy import ndimage
 
@@ -25,6 +27,10 @@ from .swath import dominant_swath
 
 # 4-connectivity neighbour offsets (row, col).
 _NEIGHBORS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+# Kilometres per degree of latitude (great-circle, mean Earth radius 6371 km).
+# Also used for longitude after scaling by cos(latitude).
+_KM_PER_DEG = math.pi * 6371.0 / 180.0
 
 
 # --- simple reductions over member cells ---------------------------------
@@ -69,8 +75,247 @@ def centroid_lon(f):
 
 
 # Convenient aliases matching common naming (shadow builtins only in this module).
+# NOTE: these shadow the builtins `max`/`min` for the rest of this module, so
+# code below uses `np.maximum`/explicit comparisons rather than bare max()/min().
 max = maximum
 min = minimum
+
+
+# --- longitude / antimeridian handling ------------------------------------
+def _wrap180(lon):
+    """Wrap a longitude (scalar or array) into the canonical [-180, 180) range."""
+    return (np.asarray(lon, dtype=float) + 180.0) % 360.0 - 180.0
+
+
+def _unwrap_lons(lons):
+    """Unroll longitudes into a contiguous arc, healing the antimeridian seam.
+
+    Member cells lie on an arc of the longitude circle. This finds the *largest
+    empty gap* between neighbouring cell longitudes and cuts the circle there,
+    then lifts the cells east of the cut by 360 deg so the whole feature becomes
+    contiguous and monotone-friendly. A feature straddling +/-180 thus reads as
+    ``[179, 180, 181]`` instead of ``[179, -179]``; a feature nowhere near the
+    seam is returned unchanged.
+
+    Returned values may exceed +180 (that is the point); wrap back with
+    :func:`_wrap180` when you need canonical longitudes. The heuristic assumes
+    the feature spans well under 180 deg of longitude, which holds for any real
+    contiguous feature - the seam is unambiguous only if there *is* a clear gap.
+    """
+    lons = np.asarray(lons, dtype=float)
+    if lons.size <= 1:
+        return lons.copy()
+    s = np.sort(lons)
+    gaps = np.diff(s)
+    wrap_gap = (s[0] + 360.0) - s[-1]
+    if gaps.size == 0 or wrap_gap >= gaps.max():
+        return lons.copy()  # largest gap already spans the seam: no straddle
+    cut_lo = s[int(np.argmax(gaps))]  # cells at or below this are the wrapped side
+    out = lons.copy()
+    out[out <= cut_lo] += 360.0
+    return out
+
+
+# --- spatial extent -------------------------------------------------------
+# The four cardinal extents are the bounding coordinates of the feature's
+# member cells. Longitude is handled across the +/-180 antimeridian via
+# `_unwrap_lons`: a feature straddling the seam reports its true (narrow) span,
+# with `east_extent` numerically less than `west_extent` - the signature of a
+# feature that wraps past +180. This healing assumes the feature spans well
+# under 180 deg of longitude (true for any real contiguous feature).
+def north_extent(f):
+    """Northernmost latitude of the feature (deg north)."""
+    return float(np.nanmax(f.lats))
+
+
+def south_extent(f):
+    """Southernmost latitude of the feature (deg north)."""
+    return float(np.nanmin(f.lats))
+
+
+def east_extent(f):
+    """Easternmost longitude of the feature (deg east), antimeridian-aware.
+
+    For a feature crossing +/-180 this is the eastern (post-seam) edge and will
+    be numerically *less* than :func:`west_extent`.
+    """
+    return float(_wrap180(_unwrap_lons(f.lons).max()))
+
+
+def west_extent(f):
+    """Westernmost longitude of the feature (deg east), antimeridian-aware."""
+    return float(_wrap180(_unwrap_lons(f.lons).min()))
+
+
+def lat_extent(f):
+    """Latitudinal span (deg): ``north_extent - south_extent``."""
+    return north_extent(f) - south_extent(f)
+
+
+def lon_extent(f):
+    """Longitudinal span (deg), antimeridian-aware.
+
+    The angular width of the feature's longitude arc. Always non-negative and
+    correct across the +/-180 seam (where a naive ``east - west`` would report
+    ~360 for a narrow feature).
+    """
+    u = _unwrap_lons(f.lons)
+    return float(u.max() - u.min())
+
+
+# --- ellipse fit / elongation ---------------------------------------------
+def _ellipse_moments(f, space):
+    """Second-moment (inertia-tensor) eigen-analysis of the feature footprint.
+
+    Fits the equivalent ellipse of the feature's *shape* - every member cell
+    counts once, unweighted by value or area, matching the usual image-moments
+    convention (e.g. scikit-image ``regionprops``).
+
+    Parameters
+    ----------
+    space : {"geographic", "grid"}
+        Coordinate system the moments are computed in.
+
+        - ``"geographic"`` projects the member cells onto a local east/north
+          tangent plane in kilometres (longitude scaled by ``cos(mean lat)``),
+          so elongation reflects true ground distance. This is what you want
+          for physical statements about feature shape, since grid cells are not
+          square in km away from the equator. Longitudes are unrolled across the
+          antimeridian first (:func:`_unwrap_lons`), so straddling features fit
+          correctly.
+        - ``"grid"`` uses raw (row, col) pixel indices - dimensionless, matches
+          a plain ``regionprops`` call, but anisotropic in km off the equator.
+          (Grid indices are already seam-free.)
+
+    Returns
+    -------
+    (l1, l2, theta) : tuple of float
+        ``l1 >= l2 >= 0`` are the eigenvalues of the coordinate covariance
+        (each a variance, km^2 for geographic), and ``theta`` is the major-axis
+        orientation in radians, counterclockwise from the x-axis (east, or
+        increasing column).
+    """
+    if space == "geographic":
+        lats = np.asarray(f.lats, dtype=float)
+        lons = _unwrap_lons(f.lons)
+        lat0 = float(lats.mean())
+        y = (lats - lat0) * _KM_PER_DEG
+        x = (lons - float(lons.mean())) * _KM_PER_DEG * math.cos(math.radians(lat0))
+    elif space == "grid":
+        y = f.rows.astype(float)
+        x = f.cols.astype(float)
+    else:
+        raise ValueError(f"space must be 'geographic' or 'grid', got {space!r}")
+
+    n = y.size
+    y = y - y.mean()
+    x = x - x.mean()
+    cyy = float((y * y).sum()) / n
+    cxx = float((x * x).sum()) / n
+    cxy = float((x * y).sum()) / n
+
+    tr = cxx + cyy
+    # Discriminant is a sum of squares, so it is always non-negative.
+    root = math.sqrt(((cxx - cyy) / 2.0) ** 2 + cxy * cxy)
+    l1 = tr / 2.0 + root
+    l2 = tr / 2.0 - root
+    if l2 < 0.0:  # tiny negative from round-off
+        l2 = 0.0
+    theta = 0.5 * math.atan2(2.0 * cxy, cxx - cyy)
+    return l1, l2, theta
+
+
+def ellipse_eccentricity(space="geographic"):
+    """Factory: eccentricity of the feature's equivalent ellipse, in [0, 1].
+
+    ``sqrt(1 - (minor/major)^2)`` where the axis lengths come from the fitted
+    ellipse (:func:`_ellipse_moments`). 0 is a circle (or a single pixel); it
+    approaches 1 as the feature becomes a thin line. Use this to rank features
+    by how elongated they are, independent of size.
+
+    ``space`` selects the coordinate system - see :func:`_ellipse_moments`.
+    The module-level :data:`eccentricity` is this with ``space="geographic"``.
+    """
+    def _eccentricity(f):
+        l1, l2, _ = _ellipse_moments(f, space)
+        if l1 <= 0.0:
+            return 0.0
+        val = 1.0 - l2 / l1
+        return float(math.sqrt(val)) if val > 0.0 else 0.0
+
+    _eccentricity.__name__ = f"eccentricity_{space}"
+    _eccentricity.__doc__ = (
+        f"Equivalent-ellipse eccentricity in [0, 1] ({space} coordinates)."
+    )
+    return _eccentricity
+
+
+def ellipse_elongation(space="geographic"):
+    """Factory: aspect ratio of the feature's equivalent ellipse, >= 1.
+
+    ``major / minor`` axis length - 1 for a circle, larger the more elongated.
+    Often easier to read than eccentricity ("3x as long as wide"). Returns
+    ``inf`` for a degenerate line (zero minor axis).
+
+    ``space`` selects the coordinate system - see :func:`_ellipse_moments`.
+    The module-level :data:`elongation` is this with ``space="geographic"``.
+    """
+    def _elongation(f):
+        l1, l2, _ = _ellipse_moments(f, space)
+        if l2 <= 0.0:
+            return math.inf if l1 > 0.0 else 1.0
+        return float(math.sqrt(l1 / l2))
+
+    _elongation.__name__ = f"elongation_{space}"
+    _elongation.__doc__ = (
+        f"Equivalent-ellipse aspect ratio major/minor, >= 1 ({space} coordinates)."
+    )
+    return _elongation
+
+
+def major_axis_km(f):
+    """Major-axis length (km) of the feature's equivalent ellipse.
+
+    ``4 * sqrt(largest second moment)`` on the geographic tangent plane - the
+    full length of the fitted ellipse, so it scales like the feature's longest
+    extent. Pairs with :func:`minor_axis_km` and :func:`orientation_deg`.
+    """
+    l1, _, _ = _ellipse_moments(f, "geographic")
+    return float(4.0 * math.sqrt(l1 if l1 > 0.0 else 0.0))
+
+
+def minor_axis_km(f):
+    """Minor-axis length (km) of the feature's equivalent ellipse.
+
+    ``4 * sqrt(smallest second moment)`` on the geographic tangent plane.
+    """
+    _, l2, _ = _ellipse_moments(f, "geographic")
+    return float(4.0 * math.sqrt(l2 if l2 > 0.0 else 0.0))
+
+
+def orientation_deg(f):
+    """Orientation of the major axis, degrees counterclockwise from east.
+
+    In (-90, 90]: 0 is east-west (zonal) elongation, +/-90 is north-south
+    (meridional). Computed on the geographic tangent plane. Meaningless for a
+    near-circular feature (see :data:`eccentricity`), so interpret it together
+    with an elongation measure.
+    """
+    _, _, theta = _ellipse_moments(f, "geographic")
+    deg = math.degrees(theta)
+    if deg <= -90.0:
+        deg += 180.0
+    elif deg > 90.0:
+        deg -= 180.0
+    return float(deg)
+
+
+#: Equivalent-ellipse eccentricity in [0, 1], geographic (km) coordinates.
+#: 0 = round, ->1 = thin line. The default elongation measure.
+eccentricity = ellipse_eccentricity(space="geographic")
+
+#: Equivalent-ellipse aspect ratio (major/minor), >= 1, geographic coordinates.
+elongation = ellipse_elongation(space="geographic")
 
 
 # --- boundary / swath edge ------------------------------------------------

@@ -96,6 +96,16 @@ def frac_above_5(f):
 - `total` — area-weighted sum (e.g. total precip volume)
 - `area_km2`
 - `centroid_lat`, `centroid_lon`
+- `north_extent`, `south_extent`, `east_extent`, `west_extent` — the feature's
+  bounding coordinates (deg); `lat_extent`, `lon_extent` — the spans. Longitude is
+  **antimeridian-aware** (see below)
+- `eccentricity`, `elongation` — shape of the equivalent fitted ellipse, for
+  describing how elongated a feature is (see below)
+- `major_axis_km`, `minor_axis_km`, `orientation_deg` — the fitted ellipse's axis
+  lengths (km) and major-axis orientation (deg CCW from east)
+- `ellipse_eccentricity(space=...)`, `ellipse_elongation(space=...)` — **factories**
+  behind `eccentricity`/`elongation`; `space="geographic"` (default, km tangent plane)
+  or `space="grid"` (raw pixel indices, matching `regionprops`)
 - `touches_boundary` — `True` if feature touches the grid edge or a NaN cell
 - `boundary_pixels` — count of feature pixels bordering the grid edge or a NaN cell
 - `touches_cross_track_edge`, `cross_track_edge_pixels` — same, but **ignoring the grid
@@ -110,6 +120,43 @@ def frac_above_5(f):
 - `swath_edge_fraction_in_dominant` — the ratio of the two, as a convenience
 - `legacy_is_complete` — bounding-box edge test, for reproducing prior GPM results
   (see below)
+
+### Extent and elongation (ellipse fitting)
+
+Four cardinal extents record where each feature reaches, and an equivalent-ellipse fit
+describes its shape:
+
+```python
+config.statistics.update({
+    "north": stats.north_extent,   "south": stats.south_extent,
+    "east":  stats.east_extent,    "west":  stats.west_extent,
+    "lon_span_deg":  stats.lon_extent,
+    "eccentricity":  stats.eccentricity,   # 0 = round, ->1 = thin line
+    "elongation":    stats.elongation,     # major/minor axis ratio, >= 1
+    "major_km":      stats.major_axis_km,
+    "orientation":   stats.orientation_deg,  # 0 = zonal (E-W), +/-90 = meridional
+})
+```
+
+The ellipse is fit from the feature footprint's second moments (every member cell counts
+once, unweighted). By default it is computed on a **local east/north tangent plane in
+km** (`space="geographic"`), so elongation reflects true ground distance — grid cells are
+not square in km away from the equator, and a purely index-space fit would over- or
+under-state elongation by up to `1/cos(lat)`. Pass `stats.ellipse_eccentricity(space="grid")`
+for the raw-pixel `regionprops` convention instead.
+
+`eccentricity` and `elongation` are two views of the same ratio: eccentricity is bounded
+in `[0, 1)` (handy for thresholding), while elongation reads directly as "N times as long
+as wide". `orientation_deg` is only meaningful for a feature that is actually elongated —
+interpret it alongside one of the shape ratios.
+
+**Antimeridian.** The longitude extents and the ellipse fit heal the ±180° seam: the
+member longitudes are unrolled across the largest empty gap in the feature's longitude
+arc, so a feature straddling the dateline reports its true (narrow) `lon_extent` rather
+than ~360°. A straddling feature's `east_extent` comes out numerically *less* than its
+`west_extent` — that inversion is the signal that the feature wraps past +180°. The
+heuristic assumes a feature spans well under 180° of longitude, which holds for any real
+contiguous feature. (`centroid_lon` is unchanged and still naive at the seam.)
 
 ### Grid edges are not always swath edges
 
