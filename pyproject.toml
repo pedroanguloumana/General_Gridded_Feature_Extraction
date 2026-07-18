@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+notebooks = ["matplotlib>=3.5", "jupyter", "nbformat", "nbconvert", "ipykernel"]
 
 [project.urls]
 Homepage = "https://github.com/pedroanguloumana/General_Gridded_Feature_Extraction"
