@@ -18,7 +18,7 @@ pip install git+https://github.com/pedroanguloumana/General_Gridded_Feature_Extr
 For local development (editable):
 
 ```bash
-conda activate general_gridded_feature_extracton
+conda activate general_gridded_feature_extraction
 pip install -e ".[test]"
 ```
 
@@ -294,7 +294,7 @@ rows.
 ## Development
 
 ```bash
-conda activate general_gridded_feature_extracton
+conda activate general_gridded_feature_extraction
 pip install -e ".[test]"
 pytest
 ```
